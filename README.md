@@ -24,6 +24,10 @@ menu:
 5. View my farm profile and recent recommendation history
 6. Toggle SMS alerts on/off
 
+Enter `admin` instead of a phone number to see platform-wide insights (registered farmers,
+SMS opt-in rate, farmers by region, most-recommended crops) — the operator-facing view of
+the same data a real deployment would show on a dashboard.
+
 ## Running the tests
 
 ```bash
@@ -41,7 +45,9 @@ kilimosmart/
   repository.py            FarmerRepository — offline JSON-file persistence (farmer profiles + recommendation history)
   session.py                USSDSession — CON/END screen state machine
   sms.py                    SMSSimulator — stands in for a real SMS gateway (e.g. Africa's Talking)
-tests/                      unittest suite for the recommendation engine and repository
+  analytics.py              PlatformAnalytics — operator-facing aggregate insights across all farmers
+  validators.py             Phone number validation
+tests/                      unittest suite for the recommendation engine, repository, session, and analytics
 data/farmers.json          Registered farmer profiles + history (created at runtime, gitignored)
 ```
 
