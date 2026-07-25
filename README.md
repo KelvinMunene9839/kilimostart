@@ -15,20 +15,34 @@ python main.py
 ```
 
 You'll be prompted to "dial in" with a phone number, then navigate a numbered USSD-style
-menu (register your farm, get a crop recommendation, check weather, check market prices,
-view your profile).
+menu:
+
+1. Register / update my farm (with SMS alerts opt-in)
+2. Get a profit-optimized crop recommendation
+3. View weather forecast (with a drought-resilience tip when the outlook is poor)
+4. View today's market prices
+5. View my farm profile and recent recommendation history
+6. Toggle SMS alerts on/off
+
+## Running the tests
+
+```bash
+python -m unittest discover -s tests
+```
 
 ## Project structure
 
 ```
 main.py                    Entry point / session loop
 kilimosmart/
-  models.py                Farmer, Crop, SoilProfile, WeatherForecast, MarketPrice, Recommendation
+  models.py                Farmer, Crop, SoilProfile, WeatherForecast, MarketPrice, Recommendation, RecommendationLog
   data_store.py            MockDataProvider — soil/weather/crop/market mock data (swap for real APIs later)
   recommendation.py        RecommendationEngine — profit-optimized crop scoring
-  repository.py            FarmerRepository — offline JSON-file persistence
+  repository.py            FarmerRepository — offline JSON-file persistence (farmer profiles + recommendation history)
   session.py                USSDSession — CON/END screen state machine
-data/farmers.json          Registered farmer profiles (created at runtime, gitignored)
+  sms.py                    SMSSimulator — stands in for a real SMS gateway (e.g. Africa's Talking)
+tests/                      unittest suite for the recommendation engine and repository
+data/farmers.json          Registered farmer profiles + history (created at runtime, gitignored)
 ```
 
 ## Notes on this prototype
@@ -39,3 +53,8 @@ data/farmers.json          Registered farmer profiles (created at runtime, gitig
 - The terminal menu mirrors a real USSD gateway's CON (continue) / END (terminate) screen
   model, so the same `USSDSession` class could later sit behind an actual Africa's
   Talking/Safaricom USSD or SMS webhook with no changes to the recommendation logic.
+- SMS delivery is simulated by printing `[SMS -> phone] message` lines; swapping `SMSSimulator`
+  for a real gateway client is the only change needed to go live.
+- When a region's weather outlook is "poor," the app surfaces a climate-resilience tip
+  (drought-tolerant crop suggestions) and, for opted-in farmers, sends a simulated proactive
+  SMS alert — directly supporting the "build long-term climate resilience" goal.

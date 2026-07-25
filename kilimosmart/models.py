@@ -66,11 +66,39 @@ class Recommendation:
 
 
 @dataclass
+class RecommendationLog:
+    """A record of a recommendation session, kept so a farmer can look back
+    at what was suggested and when.
+    """
+    timestamp: str
+    region: str
+    farm_size_acres: float
+    top_crop: str
+    score: float
+    estimated_profit: float
+
+    def to_dict(self) -> dict:
+        return {
+            "timestamp": self.timestamp,
+            "region": self.region,
+            "farm_size_acres": self.farm_size_acres,
+            "top_crop": self.top_crop,
+            "score": self.score,
+            "estimated_profit": self.estimated_profit,
+        }
+
+    @staticmethod
+    def from_dict(data: dict) -> "RecommendationLog":
+        return RecommendationLog(**data)
+
+
+@dataclass
 class Farmer:
     phone: str
     name: str
     region: str
     farm_size_acres: float
+    sms_opt_in: bool = False
     registered_on: str = field(default_factory=lambda: date.today().isoformat())
 
     def to_dict(self) -> dict:
@@ -79,6 +107,7 @@ class Farmer:
             "name": self.name,
             "region": self.region,
             "farm_size_acres": self.farm_size_acres,
+            "sms_opt_in": self.sms_opt_in,
             "registered_on": self.registered_on,
         }
 
@@ -89,5 +118,6 @@ class Farmer:
             name=data["name"],
             region=data["region"],
             farm_size_acres=data["farm_size_acres"],
+            sms_opt_in=data.get("sms_opt_in", False),
             registered_on=data.get("registered_on", date.today().isoformat()),
         )

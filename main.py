@@ -10,12 +10,13 @@ from kilimosmart.data_store import MockDataProvider
 from kilimosmart.recommendation import RecommendationEngine
 from kilimosmart.repository import FarmerRepository
 from kilimosmart.session import USSDSession
+from kilimosmart.sms import SMSSimulator
 
 USSD_CODE = "*384*7#"
 
 
-def run_session(phone: str, repo: FarmerRepository, data: MockDataProvider, engine: RecommendationEngine) -> None:
-    session = USSDSession(phone, repo, data, engine)
+def run_session(phone: str, repo: FarmerRepository, data: MockDataProvider, engine: RecommendationEngine, sms: SMSSimulator) -> None:
+    session = USSDSession(phone, repo, data, engine, sms)
     print(session.start())
     while not session.is_done():
         user_input = input("> ")
@@ -26,6 +27,7 @@ def main() -> None:
     repo = FarmerRepository()
     data = MockDataProvider()
     engine = RecommendationEngine(data)
+    sms = SMSSimulator()
 
     print("=" * 50)
     print(" KilimoSmart - USSD/SMS Prototype Simulator")
@@ -39,7 +41,7 @@ def main() -> None:
             break
         if not phone:
             continue
-        run_session(phone, repo, data, engine)
+        run_session(phone, repo, data, engine, sms)
 
 
 if __name__ == "__main__":
