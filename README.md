@@ -80,3 +80,4 @@ requirements.txt           Python dependencies (mysql-connector-python)
 - When a region's weather outlook is "poor," the app surfaces a climate-resilience tip
   (drought-tolerant crop suggestions) and, for opted-in farmers, sends a simulated proactive
   SMS alert — directly supporting the "build long-term climate resilience" goal.
+
