@@ -1,19 +1,15 @@
-import tempfile
 import unittest
-from datetime import date
-from pathlib import Path
 
 from kilimosmart.models import Farmer, RecommendationLog
-from kilimosmart.repository import FarmerRepository
+from tests.db_helpers import clear_test_db, new_test_repository
 
 
 class FarmerRepositoryTests(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.repo = FarmerRepository(Path(self._tmpdir.name) / "farmers.json")
+        self.repo = new_test_repository()
 
     def tearDown(self):
-        self._tmpdir.cleanup()
+        clear_test_db()
 
     def test_save_and_get_round_trip(self):
         farmer = Farmer(phone="0700111222", name="Amina", region="Kisumu", farm_size_acres=3.0, sms_opt_in=True)

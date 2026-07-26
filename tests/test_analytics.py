@@ -1,20 +1,17 @@
-import tempfile
 import unittest
-from pathlib import Path
 
 from kilimosmart.analytics import PlatformAnalytics
 from kilimosmart.models import Farmer, RecommendationLog
-from kilimosmart.repository import FarmerRepository
+from tests.db_helpers import clear_test_db, new_test_repository
 
 
 class PlatformAnalyticsTests(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.repo = FarmerRepository(Path(self._tmpdir.name) / "farmers.json")
+        self.repo = new_test_repository()
         self.analytics = PlatformAnalytics(self.repo)
 
     def tearDown(self):
-        self._tmpdir.cleanup()
+        clear_test_db()
 
     def test_summary_with_no_farmers(self):
         self.assertEqual(self.analytics.summary(), "No farmers registered yet.")

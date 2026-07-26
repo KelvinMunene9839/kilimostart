@@ -10,7 +10,14 @@ command-line prototype that simulates a USSD session end-to-end.
 
 ## Running it
 
+Farmer profiles and recommendation history are stored in MySQL. Start XAMPP's
+MySQL server first (default `root` user, no password, `127.0.0.1:3306` — override
+with the `KILIMOSMART_DB_HOST` / `KILIMOSMART_DB_PORT` / `KILIMOSMART_DB_USER` /
+`KILIMOSMART_DB_PASSWORD` / `KILIMOSMART_DB_NAME` env vars if yours differs). The
+`kilimosmart` database and its tables are created automatically on first run.
+
 ```bash
+pip install -r requirements.txt
 python main.py
 ```
 
@@ -30,6 +37,10 @@ the same data a real deployment would show on a dashboard.
 
 ## Running the tests
 
+Tests run against a dedicated `kilimosmart_test` MySQL database (also created
+automatically), separate from the `kilimosmart` database used by the app, so
+they never touch real data.
+
 ```bash
 python -m unittest discover -s tests
 ```
@@ -42,13 +53,13 @@ kilimosmart/
   models.py                Farmer, Crop, SoilProfile, WeatherForecast, MarketPrice, Recommendation, RecommendationLog
   data_store.py            MockDataProvider — soil/weather/crop/market mock data (swap for real APIs later)
   recommendation.py        RecommendationEngine — profit-optimized crop scoring
-  repository.py            FarmerRepository — offline JSON-file persistence (farmer profiles + recommendation history)
+  repository.py            FarmerRepository — MySQL persistence (farmer profiles + recommendation history)
   session.py                USSDSession — CON/END screen state machine
   sms.py                    SMSSimulator — stands in for a real SMS gateway (e.g. Africa's Talking)
   analytics.py              PlatformAnalytics — operator-facing aggregate insights across all farmers
   validators.py             Phone number validation
 tests/                      unittest suite for the recommendation engine, repository, session, and analytics
-data/farmers.json          Registered farmer profiles + history (created at runtime, gitignored)
+requirements.txt           Python dependencies (mysql-connector-python)
 ```
 
 ## Notes on this prototype

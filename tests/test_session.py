@@ -1,27 +1,24 @@
-import tempfile
 import unittest
 from datetime import date
-from pathlib import Path
 
 from kilimosmart.data_store import MockDataProvider
 from kilimosmart.recommendation import RecommendationEngine
-from kilimosmart.repository import FarmerRepository
 from kilimosmart.session import USSDSession
 from kilimosmart.sms import SMSSimulator
+from tests.db_helpers import clear_test_db, new_test_repository
 
 PHONE = "0700111222"
 
 
 class USSDSessionTests(unittest.TestCase):
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.repo = FarmerRepository(Path(self._tmpdir.name) / "farmers.json")
+        self.repo = new_test_repository()
         self.data = MockDataProvider(seed_date=date(2026, 1, 1))
         self.engine = RecommendationEngine(self.data)
         self.sms = SMSSimulator()
 
     def tearDown(self):
-        self._tmpdir.cleanup()
+        clear_test_db()
 
     def _new_session(self) -> USSDSession:
         return USSDSession(PHONE, self.repo, self.data, self.engine, self.sms)
