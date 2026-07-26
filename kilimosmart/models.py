@@ -94,30 +94,14 @@ class RecommendationLog:
 
 @dataclass
 class Farmer:
+    """One registered farm. A phone number may own several of these — each
+    is its own row, identified by `id` once persisted (`id` is None for a
+    farm that hasn't been saved yet).
+    """
     phone: str
     name: str
     region: str
     farm_size_acres: float
     sms_opt_in: bool = False
     registered_on: str = field(default_factory=lambda: date.today().isoformat())
-
-    def to_dict(self) -> dict:
-        return {
-            "phone": self.phone,
-            "name": self.name,
-            "region": self.region,
-            "farm_size_acres": self.farm_size_acres,
-            "sms_opt_in": self.sms_opt_in,
-            "registered_on": self.registered_on,
-        }
-
-    @staticmethod
-    def from_dict(data: dict) -> "Farmer":
-        return Farmer(
-            phone=data["phone"],
-            name=data["name"],
-            region=data["region"],
-            farm_size_acres=data["farm_size_acres"],
-            sms_opt_in=data.get("sms_opt_in", False),
-            registered_on=data.get("registered_on", date.today().isoformat()),
-        )
+    id: int | None = None

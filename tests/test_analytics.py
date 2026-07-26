@@ -17,10 +17,12 @@ class PlatformAnalyticsTests(unittest.TestCase):
         self.assertEqual(self.analytics.summary(), "No farmers registered yet.")
 
     def test_summary_reports_counts_and_top_crop(self):
-        self.repo.save(Farmer("0700000001", "A", "Kericho", 1.0, sms_opt_in=True))
-        self.repo.save(Farmer("0700000002", "B", "Kericho", 2.0, sms_opt_in=False))
-        self.repo.add_history("0700000001", RecommendationLog("2026-01-01T00:00:00", "Kericho", 1.0, "Maize", 0.8, 1000.0))
-        self.repo.add_history("0700000002", RecommendationLog("2026-01-02T00:00:00", "Kericho", 2.0, "Maize", 0.7, 2000.0))
+        farmer1 = Farmer("0700000001", "A", "Kericho", 1.0, sms_opt_in=True)
+        farmer2 = Farmer("0700000002", "B", "Kericho", 2.0, sms_opt_in=False)
+        self.repo.save(farmer1)
+        self.repo.save(farmer2)
+        self.repo.add_history(farmer1.id, RecommendationLog("2026-01-01T00:00:00", "Kericho", 1.0, "Maize", 0.8, 1000.0))
+        self.repo.add_history(farmer2.id, RecommendationLog("2026-01-02T00:00:00", "Kericho", 2.0, "Maize", 0.7, 2000.0))
 
         summary = self.analytics.summary()
 

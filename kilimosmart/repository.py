@@ -1,8 +1,12 @@
-"""Persistence for farmer profiles and their recommendation history.
+"""Persistence for farm profiles and their recommendation history.
 
 Backed by MySQL (served locally via XAMPP) rather than a JSON file, so the
 data survives independently of the CLI process and mirrors how the
 SMS/USSD gateway's subscriber store would be persisted in production.
+
+A phone number can own several farms (e.g. a farmer with plots in
+different regions), so each farm is its own row identified by a surrogate
+`id`; `phone` is a plain indexed column, not the primary key.
 """
 
 import os
@@ -11,7 +15,7 @@ from kilimosmart.models import Farmer, RecommendationLog
 
 import mysql.connector
 
-MAX_HISTORY_PER_FARMER = 10
+MAX_HISTORY_PER_FARM = 10
 
 DB_CONFIG = {
     "host": os.environ.get("KILIMOSMART_DB_HOST", "127.0.0.1"),
@@ -53,12 +57,14 @@ class FarmerRepository:
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS farmers (
-                    phone VARCHAR(20) PRIMARY KEY,
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    phone VARCHAR(20) NOT NULL,
                     name VARCHAR(255) NOT NULL,
                     region VARCHAR(100) NOT NULL,
                     farm_size_acres DOUBLE NOT NULL,
                     sms_opt_in TINYINT(1) NOT NULL DEFAULT 0,
-                    registered_on VARCHAR(10) NOT NULL
+                    registered_on VARCHAR(10) NOT NULL,
+                    INDEX idx_phone (phone)
                 )
                 """
             )
@@ -66,14 +72,15 @@ class FarmerRepository:
                 """
                 CREATE TABLE IF NOT EXISTS recommendation_history (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    phone VARCHAR(20) NOT NULL,
+                    farm_id INT NOT NULL,
                     timestamp VARCHAR(32) NOT NULL,
                     region VARCHAR(100) NOT NULL,
                     farm_size_acres DOUBLE NOT NULL,
                     top_crop VARCHAR(100) NOT NULL,
                     score DOUBLE NOT NULL,
                     estimated_profit DOUBLE NOT NULL,
-                    INDEX idx_phone (phone)
+                    INDEX idx_farm_id (farm_id),
+                    FOREIGN KEY (farm_id) REFERENCES farmers(id) ON DELETE CASCADE
                 )
                 """
             )
@@ -81,53 +88,85 @@ class FarmerRepository:
         finally:
             conn.close()
 
-    def save(self, farmer: Farmer) -> None:
+    def save(self, farmer: Farmer) -> Farmer:
+        """Insert a new farm (when `farmer.id` is None) or update an
+        existing one in place. Returns the farmer with `id` populated.
+        """
         conn = self._connect()
         try:
             cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO farmers (phone, name, region, farm_size_acres, sms_opt_in, registered_on)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                    name = VALUES(name),
-                    region = VALUES(region),
-                    farm_size_acres = VALUES(farm_size_acres),
-                    sms_opt_in = VALUES(sms_opt_in),
-                    registered_on = VALUES(registered_on)
-                """,
-                (
-                    farmer.phone,
-                    farmer.name,
-                    farmer.region,
-                    farmer.farm_size_acres,
-                    int(farmer.sms_opt_in),
-                    farmer.registered_on,
-                ),
-            )
+            if farmer.id is None:
+                cur.execute(
+                    """
+                    INSERT INTO farmers (phone, name, region, farm_size_acres, sms_opt_in, registered_on)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        farmer.phone,
+                        farmer.name,
+                        farmer.region,
+                        farmer.farm_size_acres,
+                        int(farmer.sms_opt_in),
+                        farmer.registered_on,
+                    ),
+                )
+                farmer.id = cur.lastrowid
+            else:
+                cur.execute(
+                    """
+                    UPDATE farmers
+                    SET phone = %s, name = %s, region = %s, farm_size_acres = %s,
+                        sms_opt_in = %s, registered_on = %s
+                    WHERE id = %s
+                    """,
+                    (
+                        farmer.phone,
+                        farmer.name,
+                        farmer.region,
+                        farmer.farm_size_acres,
+                        int(farmer.sms_opt_in),
+                        farmer.registered_on,
+                        farmer.id,
+                    ),
+                )
             conn.commit()
+            return farmer
         finally:
             conn.close()
 
-    def get(self, phone: str) -> Farmer | None:
+    def get(self, farm_id: int) -> Farmer | None:
         conn = self._connect()
         try:
             cur = conn.cursor(dictionary=True)
             cur.execute(
-                "SELECT phone, name, region, farm_size_acres, sms_opt_in, registered_on "
-                "FROM farmers WHERE phone = %s",
-                (phone,),
+                "SELECT id, phone, name, region, farm_size_acres, sms_opt_in, registered_on "
+                "FROM farmers WHERE id = %s",
+                (farm_id,),
             )
             row = cur.fetchone()
             return self._farmer_from_row(row) if row else None
         finally:
             conn.close()
 
-    def exists(self, phone: str) -> bool:
+    def get_by_phone(self, phone: str) -> list[Farmer]:
+        """All farms registered under a phone number, oldest first."""
+        conn = self._connect()
+        try:
+            cur = conn.cursor(dictionary=True)
+            cur.execute(
+                "SELECT id, phone, name, region, farm_size_acres, sms_opt_in, registered_on "
+                "FROM farmers WHERE phone = %s ORDER BY id ASC",
+                (phone,),
+            )
+            return [self._farmer_from_row(row) for row in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def exists_for_phone(self, phone: str) -> bool:
         conn = self._connect()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT 1 FROM farmers WHERE phone = %s", (phone,))
+            cur.execute("SELECT 1 FROM farmers WHERE phone = %s LIMIT 1", (phone,))
             return cur.fetchone() is not None
         finally:
             conn.close()
@@ -137,24 +176,24 @@ class FarmerRepository:
         try:
             cur = conn.cursor(dictionary=True)
             cur.execute(
-                "SELECT phone, name, region, farm_size_acres, sms_opt_in, registered_on FROM farmers"
+                "SELECT id, phone, name, region, farm_size_acres, sms_opt_in, registered_on FROM farmers"
             )
             return [self._farmer_from_row(row) for row in cur.fetchall()]
         finally:
             conn.close()
 
-    def add_history(self, phone: str, log: RecommendationLog) -> None:
+    def add_history(self, farm_id: int, log: RecommendationLog) -> None:
         conn = self._connect()
         try:
             cur = conn.cursor()
             cur.execute(
                 """
                 INSERT INTO recommendation_history
-                    (phone, timestamp, region, farm_size_acres, top_crop, score, estimated_profit)
+                    (farm_id, timestamp, region, farm_size_acres, top_crop, score, estimated_profit)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    phone,
+                    farm_id,
                     log.timestamp,
                     log.region,
                     log.farm_size_acres,
@@ -166,22 +205,22 @@ class FarmerRepository:
             cur.execute(
                 """
                 DELETE FROM recommendation_history
-                WHERE phone = %s AND id NOT IN (
+                WHERE farm_id = %s AND id NOT IN (
                     SELECT id FROM (
                         SELECT id FROM recommendation_history
-                        WHERE phone = %s
+                        WHERE farm_id = %s
                         ORDER BY id DESC
                         LIMIT %s
                     ) AS keep_ids
                 )
                 """,
-                (phone, phone, MAX_HISTORY_PER_FARMER),
+                (farm_id, farm_id, MAX_HISTORY_PER_FARM),
             )
             conn.commit()
         finally:
             conn.close()
 
-    def get_history(self, phone: str) -> list[RecommendationLog]:
+    def get_history(self, farm_id: int) -> list[RecommendationLog]:
         conn = self._connect()
         try:
             cur = conn.cursor(dictionary=True)
@@ -189,11 +228,11 @@ class FarmerRepository:
                 """
                 SELECT timestamp, region, farm_size_acres, top_crop, score, estimated_profit
                 FROM recommendation_history
-                WHERE phone = %s
+                WHERE farm_id = %s
                 ORDER BY id DESC
                 LIMIT %s
                 """,
-                (phone, MAX_HISTORY_PER_FARMER),
+                (farm_id, MAX_HISTORY_PER_FARM),
             )
             rows = cur.fetchall()
             rows.reverse()
@@ -204,6 +243,7 @@ class FarmerRepository:
     @staticmethod
     def _farmer_from_row(row: dict) -> Farmer:
         return Farmer(
+            id=row["id"],
             phone=row["phone"],
             name=row["name"],
             region=row["region"],

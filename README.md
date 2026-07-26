@@ -31,6 +31,11 @@ menu:
 5. View my farm profile and recent recommendation history
 6. Toggle SMS alerts on/off
 
+A single phone number can own several farms. Option 1 offers "register a new farm" or
+"update an existing farm" once you have at least one; options 2 and 6 ask which farm to
+act on whenever you have more than one; and option 5 lists every farm registered to that
+number along with each farm's own recommendation history.
+
 Enter `admin` instead of a phone number to see platform-wide insights (registered farmers,
 SMS opt-in rate, farmers by region, most-recommended crops) — the operator-facing view of
 the same data a real deployment would show on a dashboard.

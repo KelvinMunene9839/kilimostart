@@ -14,12 +14,16 @@ from kilimosmart.sms import SMSSimulator
 DROUGHT_TOLERANT_THRESHOLD_MM = 60
 
 MAIN_MENU = "menu"
+REGISTER_CHOICE = "register_choice"
+REGISTER_SELECT_FARM = "register_select_farm"
 REGISTER_NAME = "register_name"
 REGISTER_REGION = "register_region"
 REGISTER_SIZE = "register_size"
 REGISTER_SMS = "register_sms"
+RECOMMEND_SELECT_FARM = "recommend_select_farm"
 RECOMMEND_REGION = "recommend_region"
 WEATHER_REGION = "weather_region"
+TOGGLE_SELECT_FARM = "toggle_select_farm"
 TOGGLE_SMS = "toggle_sms"
 DONE = "done"
 
@@ -27,6 +31,10 @@ DONE = "done"
 class USSDSession:
     """One simulated *384# dialog. Call `handle(input)` per screen and print
     the returned text, exactly like a real USSD gateway request/response.
+
+    A phone number can own several farms, so any action that targets one
+    farm (register-update, recommend, toggle SMS) asks the caller to pick
+    which farm when more than one is registered.
     """
 
     def __init__(
@@ -59,10 +67,12 @@ class USSDSession:
     # -- Screens -----------------------------------------------------
 
     def _main_menu_screen(self) -> str:
-        farmer = self._repo.get(self._phone)
+        farms = self._repo.get_by_phone(self._phone)
         sms_line = ""
-        if farmer:
-            sms_line = f"6. SMS alerts: turn {'off' if farmer.sms_opt_in else 'on'}\n"
+        if len(farms) == 1:
+            sms_line = f"6. SMS alerts: turn {'off' if farms[0].sms_opt_in else 'on'}\n"
+        elif len(farms) > 1:
+            sms_line = "6. Toggle SMS alerts for a farm\n"
         return (
             "CON Welcome to KilimoSmart\n"
             "1. Register / update my farm\n"
@@ -76,14 +86,9 @@ class USSDSession:
 
     def _handle_menu(self, choice: str) -> str:
         if choice == "1":
-            self._state = REGISTER_NAME
-            return "CON Enter your full name:"
+            return self._start_registration()
         if choice == "2":
-            if not self._repo.exists(self._phone):
-                self._state = DONE
-                return "END You must register first (option 1)."
-            self._state = RECOMMEND_REGION
-            return self._region_prompt()
+            return self._start_recommendation()
         if choice == "3":
             self._state = WEATHER_REGION
             return self._region_prompt()
@@ -93,9 +98,8 @@ class USSDSession:
         if choice == "5":
             self._state = DONE
             return self._profile_screen()
-        if choice == "6" and self._repo.exists(self._phone):
-            self._state = TOGGLE_SMS
-            return self._handle_toggle_sms("")
+        if choice == "6" and self._repo.exists_for_phone(self._phone):
+            return self._start_toggle()
         if choice == "0":
             self._state = DONE
             return "END Asante for using KilimoSmart. Kwaheri!"
@@ -111,7 +115,56 @@ class USSDSession:
             return regions[int(choice) - 1]
         return None
 
+    def _farm_list_prompt(self, farms: list[Farmer], title: str) -> str:
+        options = "\n".join(
+            f"{i + 1}. {f.name} - {f.region} ({f.farm_size_acres} acres)" for i, f in enumerate(farms)
+        )
+        return f"CON {title}\n{options}"
+
+    def _farm_from_choice(self, choice: str, farms: list[Farmer]) -> Farmer | None:
+        if choice.isdigit() and 1 <= int(choice) <= len(farms):
+            return farms[int(choice) - 1]
+        return None
+
     # -- Registration --
+
+    def _start_registration(self) -> str:
+        farms = self._repo.get_by_phone(self._phone)
+        if not farms:
+            self._pending = {}
+            self._state = REGISTER_NAME
+            return "CON Enter your full name:"
+        self._state = REGISTER_CHOICE
+        return (
+            f"CON You have {len(farms)} farm(s) registered.\n"
+            "1. Register a new farm\n"
+            "2. Update an existing farm"
+        )
+
+    def _handle_register_choice(self, choice: str) -> str:
+        if choice == "1":
+            self._pending = {}
+            self._state = REGISTER_NAME
+            return "CON Enter your full name:"
+        if choice == "2":
+            farms = self._repo.get_by_phone(self._phone)
+            if len(farms) == 1:
+                return self._begin_farm_update(farms[0])
+            self._state = REGISTER_SELECT_FARM
+            return self._farm_list_prompt(farms, "Choose a farm to update:")
+        return "CON Invalid choice.\n1. Register a new farm\n2. Update an existing farm"
+
+    def _handle_register_select_farm(self, choice: str) -> str:
+        farms = self._repo.get_by_phone(self._phone)
+        farm = self._farm_from_choice(choice, farms)
+        if not farm:
+            return "CON Invalid choice.\n" + self._farm_list_prompt(farms, "Choose a farm to update:").replace("CON ", "")
+        return self._begin_farm_update(farm)
+
+    def _begin_farm_update(self, farm: Farmer) -> str:
+        self._pending = {"farm_id": farm.id, "registered_on": farm.registered_on}
+        self._state = REGISTER_NAME
+        return "CON Enter your full name:"
 
     def _handle_register_name(self, name: str) -> str:
         if not name:
@@ -142,25 +195,56 @@ class USSDSession:
     def _handle_register_sms(self, choice: str) -> str:
         if choice not in ("1", "2"):
             return "CON Invalid choice.\n1. Yes\n2. No"
+        is_update = "farm_id" in self._pending
         farmer = Farmer(
             phone=self._phone,
             name=self._pending["name"],
             region=self._pending["region"],
             farm_size_acres=self._pending["size"],
             sms_opt_in=(choice == "1"),
+            id=self._pending.get("farm_id"),
         )
+        if "registered_on" in self._pending:
+            farmer.registered_on = self._pending["registered_on"]
         self._repo.save(farmer)
         self._state = DONE
-        return f"END Registered {farmer.name} in {farmer.region} ({farmer.farm_size_acres} acres). Dial in again for recommendations."
+        action = "Updated" if is_update else "Registered"
+        return (
+            f"END {action} {farmer.name}'s farm in {farmer.region} "
+            f"({farmer.farm_size_acres} acres). Dial in again for recommendations."
+        )
 
     # -- Recommendation --
+
+    def _start_recommendation(self) -> str:
+        farms = self._repo.get_by_phone(self._phone)
+        if not farms:
+            self._state = DONE
+            return "END You must register first (option 1)."
+        if len(farms) == 1:
+            self._pending = {"farm_id": farms[0].id}
+            self._state = RECOMMEND_REGION
+            return self._region_prompt()
+        self._state = RECOMMEND_SELECT_FARM
+        return self._farm_list_prompt(farms, "Choose a farm for this recommendation:")
+
+    def _handle_recommend_select_farm(self, choice: str) -> str:
+        farms = self._repo.get_by_phone(self._phone)
+        farm = self._farm_from_choice(choice, farms)
+        if not farm:
+            return "CON Invalid choice.\n" + self._farm_list_prompt(
+                farms, "Choose a farm for this recommendation:"
+            ).replace("CON ", "")
+        self._pending = {"farm_id": farm.id}
+        self._state = RECOMMEND_REGION
+        return self._region_prompt()
 
     def _handle_recommend_region(self, choice: str) -> str:
         region = self._region_from_choice(choice)
         if not region:
             return "CON Invalid region.\n" + self._region_prompt().replace("CON ", "")
         self._pending["region"] = region
-        farmer = self._repo.get(self._phone)
+        farmer = self._repo.get(self._pending["farm_id"])
         self._pending["size"] = farmer.farm_size_acres
         return self._recommendation_screen(farmer)
 
@@ -173,7 +257,7 @@ class USSDSession:
             lines.append(f"{i}. {rec.crop.name} - score {rec.score:.0%} - {rec.reasoning}")
 
         top = results[0]
-        self._repo.add_history(self._phone, RecommendationLog(
+        self._repo.add_history(farmer.id, RecommendationLog(
             timestamp=datetime.now().isoformat(timespec="seconds"),
             region=region,
             farm_size_acres=size,
@@ -207,21 +291,41 @@ class USSDSession:
         if forecast.outlook == "poor":
             tolerant = [c.name for c in self._data.crop_catalog() if c.water_need_mm <= DROUGHT_TOLERANT_THRESHOLD_MM]
             lines.append(f"Climate tip: drought risk - consider drought-tolerant crops like {', '.join(tolerant)}.")
-            farmer = self._repo.get(self._phone)
-            if farmer and farmer.sms_opt_in:
+            farms = self._repo.get_by_phone(self._phone)
+            if any(f.sms_opt_in for f in farms):
                 self._sms.send(self._phone, f"KilimoSmart alert: drought risk in {region}. Consider {', '.join(tolerant)}.")
         self._state = DONE
         return "\n".join(lines)
 
     # -- SMS toggle --
 
+    def _start_toggle(self) -> str:
+        farms = self._repo.get_by_phone(self._phone)
+        if len(farms) == 1:
+            self._pending = {"farm_id": farms[0].id}
+            self._state = TOGGLE_SMS
+            return self._handle_toggle_sms("")
+        self._state = TOGGLE_SELECT_FARM
+        return self._farm_list_prompt(farms, "Choose a farm to toggle SMS alerts for:")
+
+    def _handle_toggle_select_farm(self, choice: str) -> str:
+        farms = self._repo.get_by_phone(self._phone)
+        farm = self._farm_from_choice(choice, farms)
+        if not farm:
+            return "CON Invalid choice.\n" + self._farm_list_prompt(
+                farms, "Choose a farm to toggle SMS alerts for:"
+            ).replace("CON ", "")
+        self._pending = {"farm_id": farm.id}
+        self._state = TOGGLE_SMS
+        return self._handle_toggle_sms("")
+
     def _handle_toggle_sms(self, _choice: str) -> str:
-        farmer = self._repo.get(self._phone)
+        farmer = self._repo.get(self._pending["farm_id"])
         farmer.sms_opt_in = not farmer.sms_opt_in
         self._repo.save(farmer)
         self._state = DONE
         status = "on" if farmer.sms_opt_in else "off"
-        return f"END SMS alerts turned {status}."
+        return f"END SMS alerts for {farmer.name}'s farm in {farmer.region} turned {status}."
 
     # -- Market prices / profile (single-screen, no further input) --
 
@@ -232,20 +336,21 @@ class USSDSession:
         return "\n".join(lines)
 
     def _profile_screen(self) -> str:
-        farmer = self._repo.get(self._phone)
-        if not farmer:
+        farms = self._repo.get_by_phone(self._phone)
+        if not farms:
             return "END No profile found. Register first (option 1)."
-        lines = [
-            "END Farm profile:",
-            f"Name: {farmer.name}",
-            f"Region: {farmer.region}",
-            f"Size: {farmer.farm_size_acres} acres",
-            f"SMS alerts: {'on' if farmer.sms_opt_in else 'off'}",
-            f"Registered: {farmer.registered_on}",
-        ]
-        history = self._repo.get_history(self._phone)
-        if history:
-            lines.append("Recent recommendations:")
-            for entry in reversed(history[-3:]):
-                lines.append(f"- {entry.timestamp}: {entry.top_crop} in {entry.region} (score {entry.score:.0%})")
+        lines = ["END Farm profile:"]
+        for i, farmer in enumerate(farms, start=1):
+            if len(farms) > 1:
+                lines.append(f"--- Farm {i}: {farmer.name} ---")
+            lines.append(f"Name: {farmer.name}")
+            lines.append(f"Region: {farmer.region}")
+            lines.append(f"Size: {farmer.farm_size_acres} acres")
+            lines.append(f"SMS alerts: {'on' if farmer.sms_opt_in else 'off'}")
+            lines.append(f"Registered: {farmer.registered_on}")
+            history = self._repo.get_history(farmer.id)
+            if history:
+                lines.append("Recent recommendations:")
+                for entry in reversed(history[-3:]):
+                    lines.append(f"- {entry.timestamp}: {entry.top_crop} in {entry.region} (score {entry.score:.0%})")
         return "\n".join(lines)

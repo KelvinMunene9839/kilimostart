@@ -23,11 +23,11 @@ class USSDSessionTests(unittest.TestCase):
     def _new_session(self) -> USSDSession:
         return USSDSession(PHONE, self.repo, self.data, self.engine, self.sms)
 
-    def _register(self, session: USSDSession, sms_choice="1") -> None:
+    def _register(self, session: USSDSession, region_choice="1", size="2.0", sms_choice="1", name="Amina Hassan") -> None:
         session.handle("1")
-        session.handle("Amina Hassan")
-        session.handle("1")  # Kericho
-        session.handle("2.0")
+        session.handle(name)
+        session.handle(region_choice)  # 1 = Kericho, 3 = Machakos
+        session.handle(size)
         session.handle(sms_choice)
 
     def test_registration_flow_saves_farmer(self):
@@ -35,11 +35,11 @@ class USSDSessionTests(unittest.TestCase):
         session.start()
         self._register(session)
 
-        farmer = self.repo.get(PHONE)
-        self.assertIsNotNone(farmer)
-        self.assertEqual(farmer.name, "Amina Hassan")
-        self.assertEqual(farmer.region, "Kericho")
-        self.assertTrue(farmer.sms_opt_in)
+        farms = self.repo.get_by_phone(PHONE)
+        self.assertEqual(len(farms), 1)
+        self.assertEqual(farms[0].name, "Amina Hassan")
+        self.assertEqual(farms[0].region, "Kericho")
+        self.assertTrue(farms[0].sms_opt_in)
         self.assertTrue(session.is_done())
 
     def test_recommendation_requires_registration_first(self):
@@ -69,7 +69,8 @@ class USSDSessionTests(unittest.TestCase):
         result = session2.handle("1")  # Kericho
 
         self.assertTrue(result.startswith("END"))
-        history = self.repo.get_history(PHONE)
+        farm = self.repo.get_by_phone(PHONE)[0]
+        history = self.repo.get_history(farm.id)
         self.assertEqual(len(history), 1)
         self.assertEqual(len(self.sms.sent), 1)
         self.assertEqual(self.sms.sent[0][0], PHONE)
@@ -78,13 +79,109 @@ class USSDSessionTests(unittest.TestCase):
         session = self._new_session()
         session.start()
         self._register(session, sms_choice="2")
-        self.assertFalse(self.repo.get(PHONE).sms_opt_in)
+        self.assertFalse(self.repo.get_by_phone(PHONE)[0].sms_opt_in)
 
         session2 = self._new_session()
         session2.start()
         session2.handle("6")
 
-        self.assertTrue(self.repo.get(PHONE).sms_opt_in)
+        self.assertTrue(self.repo.get_by_phone(PHONE)[0].sms_opt_in)
+
+    def test_register_again_offers_new_or_update_choice(self):
+        session = self._new_session()
+        session.start()
+        self._register(session)
+
+        session2 = self._new_session()
+        session2.start()
+        result = session2.handle("1")
+
+        self.assertTrue(result.startswith("CON"))
+        self.assertIn("Register a new farm", result)
+        self.assertIn("Update an existing farm", result)
+
+    def test_register_new_farm_adds_second_farm_for_same_phone(self):
+        session = self._new_session()
+        session.start()
+        self._register(session, region_choice="1", name="Amina Hassan")  # Kericho
+
+        session2 = self._new_session()
+        session2.start()
+        session2.handle("1")  # existing farm(s) -> choice screen
+        session2.handle("1")  # register a new farm
+        session2.handle("Second Farm")
+        session2.handle("3")  # Machakos
+        session2.handle("1.0")
+        session2.handle("2")
+
+        farms = self.repo.get_by_phone(PHONE)
+        self.assertEqual(len(farms), 2)
+        self.assertEqual({f.region for f in farms}, {"Kericho", "Machakos"})
+
+    def test_update_existing_single_farm_preserves_registered_on(self):
+        session = self._new_session()
+        session.start()
+        self._register(session)
+        original_registered_on = self.repo.get_by_phone(PHONE)[0].registered_on
+
+        session2 = self._new_session()
+        session2.start()
+        session2.handle("1")  # existing farm -> new/update choice
+        session2.handle("2")  # update (only one farm, so no selection screen needed)
+        session2.handle("Amina Hassan")
+        session2.handle("1")  # Kericho
+        session2.handle("4.0")  # new size
+        session2.handle("1")
+
+        farms = self.repo.get_by_phone(PHONE)
+        self.assertEqual(len(farms), 1)
+        self.assertEqual(farms[0].farm_size_acres, 4.0)
+        self.assertEqual(farms[0].registered_on, original_registered_on)
+
+    def test_profile_shows_all_farms_for_phone(self):
+        session = self._new_session()
+        session.start()
+        self._register(session, region_choice="1", name="Amina Hassan")
+
+        session2 = self._new_session()
+        session2.start()
+        session2.handle("1")
+        session2.handle("1")  # register a new farm
+        session2.handle("Second Farm")
+        session2.handle("3")  # Machakos
+        session2.handle("1.0")
+        session2.handle("2")
+
+        session3 = self._new_session()
+        session3.start()
+        result = session3.handle("5")
+
+        self.assertIn("Amina Hassan", result)
+        self.assertIn("Second Farm", result)
+        self.assertIn("Kericho", result)
+        self.assertIn("Machakos", result)
+
+    def test_recommend_prompts_farm_selection_when_multiple_farms(self):
+        session = self._new_session()
+        session.start()
+        self._register(session, region_choice="1", name="Amina Hassan")
+
+        session2 = self._new_session()
+        session2.start()
+        session2.handle("1")
+        session2.handle("1")
+        session2.handle("Second Farm")
+        session2.handle("3")
+        session2.handle("1.0")
+        session2.handle("2")
+
+        session3 = self._new_session()
+        session3.start()
+        result = session3.handle("2")
+
+        self.assertTrue(result.startswith("CON"))
+        self.assertIn("Amina Hassan", result)
+        self.assertIn("Second Farm", result)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ class PlatformAnalytics:
 
         crop_counts: Counter = Counter()
         for farmer in farmers:
-            for entry in self._repo.get_history(farmer.phone):
+            for entry in self._repo.get_history(farmer.id):
                 crop_counts[entry.top_crop] += 1
 
         lines = [
