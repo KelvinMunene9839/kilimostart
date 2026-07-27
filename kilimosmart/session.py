@@ -16,12 +16,14 @@ DROUGHT_TOLERANT_THRESHOLD_MM = 60
 MAIN_MENU = "menu"
 REGISTER_CHOICE = "register_choice"
 REGISTER_SELECT_FARM = "register_select_farm"
+DELETE_SELECT_FARM = "delete_select_farm"
+DELETE_CONFIRM = "delete_confirm"
+PROFILE_SELECT_FARM = "profile_select_farm"
 REGISTER_NAME = "register_name"
 REGISTER_REGION = "register_region"
 REGISTER_SIZE = "register_size"
 REGISTER_SMS = "register_sms"
 RECOMMEND_SELECT_FARM = "recommend_select_farm"
-RECOMMEND_REGION = "recommend_region"
 WEATHER_REGION = "weather_region"
 TOGGLE_SELECT_FARM = "toggle_select_farm"
 TOGGLE_SMS = "toggle_sms"
@@ -96,8 +98,7 @@ class USSDSession:
             self._state = DONE
             return self._market_prices_screen()
         if choice == "5":
-            self._state = DONE
-            return self._profile_screen()
+            return self._start_profile()
         if choice == "6" and self._repo.exists_for_phone(self._phone):
             return self._start_toggle()
         if choice == "0":
@@ -138,7 +139,8 @@ class USSDSession:
         return (
             f"CON You have {len(farms)} farm(s) registered.\n"
             "1. Register a new farm\n"
-            "2. Update an existing farm"
+            "2. Update an existing farm\n"
+            "3. Delete a farm"
         )
 
     def _handle_register_choice(self, choice: str) -> str:
@@ -152,7 +154,13 @@ class USSDSession:
                 return self._begin_farm_update(farms[0])
             self._state = REGISTER_SELECT_FARM
             return self._farm_list_prompt(farms, "Choose a farm to update:")
-        return "CON Invalid choice.\n1. Register a new farm\n2. Update an existing farm"
+        if choice == "3":
+            farms = self._repo.get_by_phone(self._phone)
+            if len(farms) == 1:
+                return self._begin_farm_delete(farms[0])
+            self._state = DELETE_SELECT_FARM
+            return self._farm_list_prompt(farms, "Choose a farm to delete:")
+        return "CON Invalid choice.\n1. Register a new farm\n2. Update an existing farm\n3. Delete a farm"
 
     def _handle_register_select_farm(self, choice: str) -> str:
         farms = self._repo.get_by_phone(self._phone)
@@ -165,6 +173,34 @@ class USSDSession:
         self._pending = {"farm_id": farm.id, "registered_on": farm.registered_on}
         self._state = REGISTER_NAME
         return "CON Enter your full name:"
+
+    def _handle_delete_select_farm(self, choice: str) -> str:
+        farms = self._repo.get_by_phone(self._phone)
+        farm = self._farm_from_choice(choice, farms)
+        if not farm:
+            return "CON Invalid choice.\n" + self._farm_list_prompt(farms, "Choose a farm to delete:").replace("CON ", "")
+        return self._begin_farm_delete(farm)
+
+    def _begin_farm_delete(self, farm: Farmer) -> str:
+        self._pending = {"farm_id": farm.id}
+        self._state = DELETE_CONFIRM
+        return (
+            f"CON Delete {farm.name}'s farm in {farm.region} ({farm.farm_size_acres} acres)?\n"
+            "This cannot be undone.\n"
+            "1. Yes, delete\n"
+            "2. No, cancel"
+        )
+
+    def _handle_delete_confirm(self, choice: str) -> str:
+        if choice == "1":
+            farmer = self._repo.get(self._pending["farm_id"])
+            self._repo.delete(farmer.id)
+            self._state = DONE
+            return f"END Deleted {farmer.name}'s farm in {farmer.region}."
+        if choice == "2":
+            self._state = DONE
+            return "END Deletion cancelled."
+        return "CON Invalid choice.\n1. Yes, delete\n2. No, cancel"
 
     def _handle_register_name(self, name: str) -> str:
         if not name:
@@ -222,9 +258,7 @@ class USSDSession:
             self._state = DONE
             return "END You must register first (option 1)."
         if len(farms) == 1:
-            self._pending = {"farm_id": farms[0].id}
-            self._state = RECOMMEND_REGION
-            return self._region_prompt()
+            return self._recommendation_screen(farms[0])
         self._state = RECOMMEND_SELECT_FARM
         return self._farm_list_prompt(farms, "Choose a farm for this recommendation:")
 
@@ -235,22 +269,11 @@ class USSDSession:
             return "CON Invalid choice.\n" + self._farm_list_prompt(
                 farms, "Choose a farm for this recommendation:"
             ).replace("CON ", "")
-        self._pending = {"farm_id": farm.id}
-        self._state = RECOMMEND_REGION
-        return self._region_prompt()
-
-    def _handle_recommend_region(self, choice: str) -> str:
-        region = self._region_from_choice(choice)
-        if not region:
-            return "CON Invalid region.\n" + self._region_prompt().replace("CON ", "")
-        self._pending["region"] = region
-        farmer = self._repo.get(self._pending["farm_id"])
-        self._pending["size"] = farmer.farm_size_acres
-        return self._recommendation_screen(farmer)
+        return self._recommendation_screen(farm)
 
     def _recommendation_screen(self, farmer: Farmer) -> str:
-        region = self._pending["region"]
-        size = self._pending["size"]
+        region = farmer.region
+        size = farmer.farm_size_acres
         results = self._engine.recommend(region, size, top_n=3)
         lines = [f"END Top crops for {region} ({size} acres):"]
         for i, rec in enumerate(results, start=1):
@@ -335,22 +358,37 @@ class USSDSession:
             lines.append(f"{price.crop_name}: {price.price_per_kg} ({price.trend})")
         return "\n".join(lines)
 
-    def _profile_screen(self) -> str:
+    def _start_profile(self) -> str:
         farms = self._repo.get_by_phone(self._phone)
         if not farms:
+            self._state = DONE
             return "END No profile found. Register first (option 1)."
-        lines = ["END Farm profile:"]
-        for i, farmer in enumerate(farms, start=1):
-            if len(farms) > 1:
-                lines.append(f"--- Farm {i}: {farmer.name} ---")
-            lines.append(f"Name: {farmer.name}")
-            lines.append(f"Region: {farmer.region}")
-            lines.append(f"Size: {farmer.farm_size_acres} acres")
-            lines.append(f"SMS alerts: {'on' if farmer.sms_opt_in else 'off'}")
-            lines.append(f"Registered: {farmer.registered_on}")
-            history = self._repo.get_history(farmer.id)
-            if history:
-                lines.append("Recent recommendations:")
-                for entry in reversed(history[-3:]):
-                    lines.append(f"- {entry.timestamp}: {entry.top_crop} in {entry.region} (score {entry.score:.0%})")
+        if len(farms) == 1:
+            self._state = DONE
+            return self._profile_screen(farms[0])
+        self._state = PROFILE_SELECT_FARM
+        return self._farm_list_prompt(farms, "Choose a farm to view:")
+
+    def _handle_profile_select_farm(self, choice: str) -> str:
+        farms = self._repo.get_by_phone(self._phone)
+        farm = self._farm_from_choice(choice, farms)
+        if not farm:
+            return "CON Invalid choice.\n" + self._farm_list_prompt(farms, "Choose a farm to view:").replace("CON ", "")
+        self._state = DONE
+        return self._profile_screen(farm)
+
+    def _profile_screen(self, farmer: Farmer) -> str:
+        lines = [
+            "END Farm profile:",
+            f"Name: {farmer.name}",
+            f"Region: {farmer.region}",
+            f"Size: {farmer.farm_size_acres} acres",
+            f"SMS alerts: {'on' if farmer.sms_opt_in else 'off'}",
+            f"Registered: {farmer.registered_on}",
+        ]
+        history = self._repo.get_history(farmer.id)
+        if history:
+            lines.append("Recent recommendations:")
+            for entry in reversed(history[-3:]):
+                lines.append(f"- {entry.timestamp}: {entry.top_crop} in {entry.region} (score {entry.score:.0%})")
         return "\n".join(lines)

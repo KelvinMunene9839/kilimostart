@@ -182,6 +182,16 @@ class FarmerRepository:
         finally:
             conn.close()
 
+    def delete(self, farm_id: int) -> None:
+        """Remove a farm and its recommendation history (via ON DELETE CASCADE)."""
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM farmers WHERE id = %s", (farm_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
     def add_history(self, farm_id: int, log: RecommendationLog) -> None:
         conn = self._connect()
         try:

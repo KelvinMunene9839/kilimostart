@@ -65,8 +65,7 @@ class USSDSessionTests(unittest.TestCase):
 
         session2 = self._new_session()
         session2.start()
-        session2.handle("2")
-        result = session2.handle("1")  # Kericho
+        result = session2.handle("2")
 
         self.assertTrue(result.startswith("END"))
         farm = self.repo.get_by_phone(PHONE)[0]
