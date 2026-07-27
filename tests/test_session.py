@@ -30,6 +30,15 @@ class USSDSessionTests(unittest.TestCase):
         session.handle(size)
         session.handle(sms_choice)
 
+    def _add_second_farm(self, session: USSDSession, region_choice="3", size="1.0", sms_choice="2") -> None:
+        """Register another farm for a phone that already has one. The name
+        is carried over automatically, so this flow skips straight to region."""
+        session.handle("1")  # existing farm(s) -> choice screen
+        session.handle("1")  # register a new farm
+        session.handle(region_choice)  # 3 = Machakos
+        session.handle(size)
+        session.handle(sms_choice)
+
     def test_registration_flow_saves_farmer(self):
         session = self._new_session()
         session.start()
@@ -106,16 +115,12 @@ class USSDSessionTests(unittest.TestCase):
 
         session2 = self._new_session()
         session2.start()
-        session2.handle("1")  # existing farm(s) -> choice screen
-        session2.handle("1")  # register a new farm
-        session2.handle("Second Farm")
-        session2.handle("3")  # Machakos
-        session2.handle("1.0")
-        session2.handle("2")
+        self._add_second_farm(session2)
 
         farms = self.repo.get_by_phone(PHONE)
         self.assertEqual(len(farms), 2)
         self.assertEqual({f.region for f in farms}, {"Kericho", "Machakos"})
+        self.assertTrue(all(f.name == "Amina Hassan" for f in farms))
 
     def test_update_existing_single_farm_preserves_registered_on(self):
         session = self._new_session()
@@ -144,19 +149,13 @@ class USSDSessionTests(unittest.TestCase):
 
         session2 = self._new_session()
         session2.start()
-        session2.handle("1")
-        session2.handle("1")  # register a new farm
-        session2.handle("Second Farm")
-        session2.handle("3")  # Machakos
-        session2.handle("1.0")
-        session2.handle("2")
+        self._add_second_farm(session2)
 
         session3 = self._new_session()
         session3.start()
         result = session3.handle("5")
 
         self.assertIn("Amina Hassan", result)
-        self.assertIn("Second Farm", result)
         self.assertIn("Kericho", result)
         self.assertIn("Machakos", result)
 
@@ -167,20 +166,15 @@ class USSDSessionTests(unittest.TestCase):
 
         session2 = self._new_session()
         session2.start()
-        session2.handle("1")
-        session2.handle("1")
-        session2.handle("Second Farm")
-        session2.handle("3")
-        session2.handle("1.0")
-        session2.handle("2")
+        self._add_second_farm(session2)
 
         session3 = self._new_session()
         session3.start()
         result = session3.handle("2")
 
         self.assertTrue(result.startswith("CON"))
-        self.assertIn("Amina Hassan", result)
-        self.assertIn("Second Farm", result)
+        self.assertIn("Kericho", result)
+        self.assertIn("Machakos", result)
 
 
 if __name__ == "__main__":

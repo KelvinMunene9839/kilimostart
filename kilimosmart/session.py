@@ -184,9 +184,10 @@ class USSDSession:
             return "CON Invalid choice.\n" + self._register_choice_screen().replace("CON ", "")
         self._push(self._register_choice_screen)
         if choice == "1":
-            self._pending = {}
-            self._state = REGISTER_NAME
-            return self._register_name_prompt()
+            farms = self._repo.get_by_phone(self._phone)
+            self._pending = {"name": farms[0].name}
+            self._state = REGISTER_REGION
+            return self._region_prompt()
         if choice == "2":
             farms = self._repo.get_by_phone(self._phone)
             if len(farms) == 1:
