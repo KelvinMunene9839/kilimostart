@@ -54,17 +54,34 @@ class USSDSession:
         self._sms = sms or SMSSimulator()
         self._state = MAIN_MENU
         self._pending: dict = {}
+        # Each entry is (state, pending snapshot, zero-arg re-render callable)
+        # for the screen being left, pushed just before moving forward so
+        # "0. Back" can restore that exact screen and its in-progress data.
+        self._history: list[tuple[str, dict, callable]] = []
 
     def start(self) -> str:
         return self._main_menu_screen()
 
     def handle(self, text: str) -> str:
         text = text.strip()
+        if text == "0" and self._state != MAIN_MENU and self._history:
+            return self._go_back()
         handler = getattr(self, f"_handle_{self._state}")
         return handler(text)
 
     def is_done(self) -> bool:
         return self._state == DONE
+
+    # -- Navigation history -------------------------------------------
+
+    def _push(self, render) -> None:
+        self._history.append((self._state, dict(self._pending), render))
+
+    def _go_back(self) -> str:
+        state, pending, render = self._history.pop()
+        self._state = state
+        self._pending = pending
+        return render()
 
     # -- Screens -----------------------------------------------------
 
@@ -88,18 +105,23 @@ class USSDSession:
 
     def _handle_menu(self, choice: str) -> str:
         if choice == "1":
+            self._push(self._main_menu_screen)
             return self._start_registration()
         if choice == "2":
+            self._push(self._main_menu_screen)
             return self._start_recommendation()
         if choice == "3":
+            self._push(self._main_menu_screen)
             self._state = WEATHER_REGION
             return self._region_prompt()
         if choice == "4":
             self._state = DONE
             return self._market_prices_screen()
         if choice == "5":
+            self._push(self._main_menu_screen)
             return self._start_profile()
         if choice == "6" and self._repo.exists_for_phone(self._phone):
+            self._push(self._main_menu_screen)
             return self._start_toggle()
         if choice == "0":
             self._state = DONE
@@ -108,7 +130,7 @@ class USSDSession:
 
     def _region_prompt(self) -> str:
         options = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(self._data.regions()))
-        return f"CON Choose your region:\n{options}"
+        return f"CON Choose your region:\n{options}\n0. Back"
 
     def _region_from_choice(self, choice: str) -> str | None:
         regions = self._data.regions()
@@ -120,7 +142,7 @@ class USSDSession:
         options = "\n".join(
             f"{i + 1}. {f.name} - {f.region} ({f.farm_size_acres} acres)" for i, f in enumerate(farms)
         )
-        return f"CON {title}\n{options}"
+        return f"CON {title}\n{options}\n0. Back"
 
     def _farm_from_choice(self, choice: str, farms: list[Farmer]) -> Farmer | None:
         if choice.isdigit() and 1 <= int(choice) <= len(farms):
@@ -129,82 +151,104 @@ class USSDSession:
 
     # -- Registration --
 
+    def _register_choice_screen(self) -> str:
+        farms = self._repo.get_by_phone(self._phone)
+        return (
+            f"CON You have {len(farms)} farm(s) registered.\n"
+            "1. Register a new farm\n"
+            "2. Update an existing farm\n"
+            "3. Delete a farm\n"
+            "0. Back"
+        )
+
+    def _register_name_prompt(self) -> str:
+        return "CON Enter your full name:\n0. Back"
+
+    def _register_size_prompt(self) -> str:
+        return "CON Enter your farm size in acres (e.g. 2.5):\n0. Back"
+
+    def _register_sms_prompt(self) -> str:
+        return "CON Opt in to free SMS alerts (weather + price warnings)?\n1. Yes\n2. No\n0. Back"
+
     def _start_registration(self) -> str:
         farms = self._repo.get_by_phone(self._phone)
         if not farms:
             self._pending = {}
             self._state = REGISTER_NAME
-            return "CON Enter your full name:"
+            return self._register_name_prompt()
         self._state = REGISTER_CHOICE
-        return (
-            f"CON You have {len(farms)} farm(s) registered.\n"
-            "1. Register a new farm\n"
-            "2. Update an existing farm\n"
-            "3. Delete a farm"
-        )
+        return self._register_choice_screen()
 
     def _handle_register_choice(self, choice: str) -> str:
+        if choice not in ("1", "2", "3"):
+            return "CON Invalid choice.\n" + self._register_choice_screen().replace("CON ", "")
+        self._push(self._register_choice_screen)
         if choice == "1":
             self._pending = {}
             self._state = REGISTER_NAME
-            return "CON Enter your full name:"
+            return self._register_name_prompt()
         if choice == "2":
             farms = self._repo.get_by_phone(self._phone)
             if len(farms) == 1:
                 return self._begin_farm_update(farms[0])
             self._state = REGISTER_SELECT_FARM
             return self._farm_list_prompt(farms, "Choose a farm to update:")
-        if choice == "3":
-            farms = self._repo.get_by_phone(self._phone)
-            if len(farms) == 1:
-                return self._begin_farm_delete(farms[0])
-            self._state = DELETE_SELECT_FARM
-            return self._farm_list_prompt(farms, "Choose a farm to delete:")
-        return "CON Invalid choice.\n1. Register a new farm\n2. Update an existing farm\n3. Delete a farm"
+        farms = self._repo.get_by_phone(self._phone)
+        if len(farms) == 1:
+            return self._begin_farm_delete(farms[0])
+        self._state = DELETE_SELECT_FARM
+        return self._farm_list_prompt(farms, "Choose a farm to delete:")
 
     def _handle_register_select_farm(self, choice: str) -> str:
         farms = self._repo.get_by_phone(self._phone)
         farm = self._farm_from_choice(choice, farms)
         if not farm:
             return "CON Invalid choice.\n" + self._farm_list_prompt(farms, "Choose a farm to update:").replace("CON ", "")
+        self._push(lambda: self._farm_list_prompt(self._repo.get_by_phone(self._phone), "Choose a farm to update:"))
         return self._begin_farm_update(farm)
 
     def _begin_farm_update(self, farm: Farmer) -> str:
         self._pending = {"farm_id": farm.id, "registered_on": farm.registered_on}
         self._state = REGISTER_NAME
-        return "CON Enter your full name:"
+        return self._register_name_prompt()
 
     def _handle_delete_select_farm(self, choice: str) -> str:
         farms = self._repo.get_by_phone(self._phone)
         farm = self._farm_from_choice(choice, farms)
         if not farm:
             return "CON Invalid choice.\n" + self._farm_list_prompt(farms, "Choose a farm to delete:").replace("CON ", "")
+        self._push(lambda: self._farm_list_prompt(self._repo.get_by_phone(self._phone), "Choose a farm to delete:"))
         return self._begin_farm_delete(farm)
 
-    def _begin_farm_delete(self, farm: Farmer) -> str:
-        self._pending = {"farm_id": farm.id}
-        self._state = DELETE_CONFIRM
+    def _delete_confirm_prompt(self, farm: Farmer) -> str:
         return (
             f"CON Delete {farm.name}'s farm in {farm.region} ({farm.farm_size_acres} acres)?\n"
             "This cannot be undone.\n"
             "1. Yes, delete\n"
-            "2. No, cancel"
+            "2. No, cancel\n"
+            "0. Back"
         )
 
+    def _begin_farm_delete(self, farm: Farmer) -> str:
+        self._pending = {"farm_id": farm.id}
+        self._state = DELETE_CONFIRM
+        return self._delete_confirm_prompt(farm)
+
     def _handle_delete_confirm(self, choice: str) -> str:
+        farmer = self._repo.get(self._pending["farm_id"])
         if choice == "1":
-            farmer = self._repo.get(self._pending["farm_id"])
             self._repo.delete(farmer.id)
             self._state = DONE
             return f"END Deleted {farmer.name}'s farm in {farmer.region}."
         if choice == "2":
             self._state = DONE
             return "END Deletion cancelled."
-        return "CON Invalid choice.\n1. Yes, delete\n2. No, cancel"
+        return "CON Invalid choice.\n" + self._delete_confirm_prompt(farmer).replace("CON ", "")
 
     def _handle_register_name(self, name: str) -> str:
         if not name:
-            return "CON Name cannot be empty. Enter your full name:"
+            return "CON Name cannot be empty.\n" + self._register_name_prompt().replace("CON ", "")
+        self._push(self._register_name_prompt)
         self._pending["name"] = name
         self._state = REGISTER_REGION
         return self._region_prompt()
@@ -213,9 +257,10 @@ class USSDSession:
         region = self._region_from_choice(choice)
         if not region:
             return "CON Invalid region.\n" + self._region_prompt().replace("CON ", "")
+        self._push(self._region_prompt)
         self._pending["region"] = region
         self._state = REGISTER_SIZE
-        return "CON Enter your farm size in acres (e.g. 2.5):"
+        return self._register_size_prompt()
 
     def _handle_register_size(self, size_text: str) -> str:
         try:
@@ -223,14 +268,15 @@ class USSDSession:
             if size <= 0:
                 raise ValueError
         except ValueError:
-            return "CON Invalid size. Enter your farm size in acres (e.g. 2.5):"
+            return "CON Invalid size.\n" + self._register_size_prompt().replace("CON ", "")
+        self._push(self._register_size_prompt)
         self._pending["size"] = size
         self._state = REGISTER_SMS
-        return "CON Opt in to free SMS alerts (weather + price warnings)?\n1. Yes\n2. No"
+        return self._register_sms_prompt()
 
     def _handle_register_sms(self, choice: str) -> str:
         if choice not in ("1", "2"):
-            return "CON Invalid choice.\n1. Yes\n2. No"
+            return "CON Invalid choice.\n" + self._register_sms_prompt().replace("CON ", "")
         is_update = "farm_id" in self._pending
         farmer = Farmer(
             phone=self._phone,
